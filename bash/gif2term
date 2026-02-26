@@ -1,0 +1,149 @@
+#!/bin/bash
+##############################################################################
+# Name: gif2term
+#
+# Description: 
+# This script takes in a video format (.mp4/webm) and converts it into a gif
+# to place into a Kitty terminal. The generated files should be able to work
+# on any terminal that supports Sixel (...I think). This requires ffmpeg and
+# access to kitty's kitten icat functions. 
+#
+# Usage: 
+# 	gif2term [OPTIONS] /path/to/gif /output/path	
+# 
+###############################################################################
+
+resize=false
+x_offset=0
+y_offset=0
+out_dim_h=300
+out_dim_w=300
+pos=()
+
+# Help function
+function show_help(){
+    echo gif2term
+    echo 
+    echo This script takes a video format \(.mp4/webm\) and converts it into a raw
+    echo binary file that could be used by fastfetch to display an animated gif
+    echo in the terminal.
+    echo 
+    echo The resulting file can be used with fastfetch\'s --raw option. Simply run
+    echo fastfetch --raw /path/to/0.bin
+    echo
+    echo Usage:
+    echo "    gif2term [-x X_OFFSET] [-y Y_OFFSET] \$VideoPath \$OutputPath"
+    echo
+    echo Options:
+    echo "    -r|--resize      Resizes the entire gif, no cropping done"
+    echo "    -l|--length      Adjust the length (or height) of the gif, Default=300."
+    echo "                     When combined with --resize, this can be -1 to retain"
+    echo "                     aspect ratio."
+    echo "    -w|--width       Adjust the width of the gif, Default=300. When combined"
+    echo "                     with --resize, this can be -1 to retain aspect ratio"
+    echo "    -x|--x_offset    Provide a positive value to shift right, negative for left"
+    echo "    -y|--y_offset    Provide a positive value to shift up, negative for down"
+
+    exit 0
+}
+
+# Arg Parse
+while (( "$#" )); do
+    case "$1" in
+	-l|--length)
+	    out_dim_h=$2
+	    shift
+	    shift
+	    ;;
+	-r|--resize)
+            resize=true
+	    shift
+	    ;;
+	-w|--width)
+	    out_dim_w=$2
+	    shift
+	    shift
+	    ;;
+        -x|--x_offset)
+            x_offset=$2
+	    shift
+	    shift
+	    ;;
+	-y|--y_offset)
+            y_offset=$2
+	    shift
+	    shift
+	    ;;
+	-h|--help)
+            show_help
+	    ;;
+	*) # Positional arguments
+	    pos+=("$1")
+	    shift
+    esac
+done
+
+set -- "${pos[@]}"
+
+INPUT_GIF=$1
+OUTPUT_DIR=$2
+
+tmp_dir=/tmp/gif2term
+mkdir -p $tmp_dir
+
+# Cleanup function
+function cleanup(){
+    echo "Cleaning up..."
+    rm -rf ${tmp_dir}
+    echo "Done"
+}
+trap cleanup EXIT INT TERM
+
+# Find the minimum of two numbers
+function min(){
+    local num1=$1
+    local num2=$2
+    local min_val=0
+
+    if (( $num1 <= $num2 )); then
+        min_val=$num1
+    else
+        min_val=$num2
+    fi
+
+    echo $min_val
+}
+
+# Generate palette for animated file
+ffmpeg -v error -i $INPUT_GIF -vf palettegen -y "${tmp_dir}/palette.png"
+ffmpeg -v error -i $INPUT_GIF -i "${tmp_dir}/palette.png" -filter_complex paletteuse -r 10 "${tmp_dir}/stage1.gif"
+
+if $resize; then
+    ffmpeg -v error -i "${tmp_dir}/stage1.gif" -vf "scale=${out_dim_w}:${out_dim_h}" "${tmp_dir}/stage1-int.gif"
+    mv "${tmp_dir}/stage1-int.gif" "${tmp_dir}/stage2.gif"
+else
+    # Parse file for dimensions
+    dims=$(ffprobe -v error -show_entries stream=width,height -of csv=p=0 "${tmp_dir}/stage1.gif")
+    IFS=',' read -ra dim_arr <<< $dims
+
+    width=${dim_arr[0]}
+    height=${dim_arr[1]}
+
+    # Compute x and y offsets
+    out_w=$(min $out_dim_w $width)
+    out_h=$(min $out_dim_h $height)
+
+    # Centers the gif by default
+    x=$(( $width/2 - $out_w/2 + $x_offset ))
+    y=$(( $height/2 - $out_h/2 - $y_offset ))
+
+    # Crop the video
+    ffmpeg -v error -i "${tmp_dir}/stage1.gif" -vf "crop=${out_w}:${out_h}:${x}:${y}" "${tmp_dir}/stage2.gif"
+
+fi
+
+# Output as bin with kitty
+bin_name=$(ls $OUTPUT_DIR | grep -c '').bin
+
+kitten icat -n --place 30x30@0x2 --transfer-mode=stream --scale-up --align left "${tmp_dir}/stage2.gif" > "${OUTPUT_DIR}/${bin_name}"
+
