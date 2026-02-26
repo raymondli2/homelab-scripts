@@ -1,0 +1,69 @@
+#!/bin/bash
+##############################################################################
+# Name: rsync-nas
+#
+# Description: 
+# The intention of this script is to be a bi-directional sync 
+# between a local machine and a remote one. When run, it first checks if there 
+# has been any updates or added files in the remote machine and pulls if there
+# is. After, the script will push the updates from the local machine to the
+# remote machine.
+#
+# This script will skip downloading/uploading files if a new version is found
+# on either the local or remote machine. 
+#
+# Usage: 
+# 	rsync-nas /path/to/src user@ip_addr:/path/to/dst
+# 
+# Note:
+# This could be used as a systemd service that runs each time on boot
+# or at a specific time if its a high availability machine
+###############################################################################
+
+# Positional Arguments (Replace ~ with $HOME)
+SRC_DIR=${1/#~/$HOME}
+DST_DIR=${2/#~/$HOME}
+
+# Local Variables
+log_dir="/var/log/$USER/rsync"
+dst_ip=$(grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' <<< $DST_DIR)
+
+# Make sure the log directory exists for rsync
+mkdir -p ${log_dir}
+
+# Test if this is actually a pingable machine
+if ! ping -c 1 -W 3 ${dst_ip} &>/dev/null; then
+    echo "ERROR: COULD NOT PING ${dst_ip}"
+    exit 1;
+fi;
+
+dst_hostname=$(ssh ${DST_DIR%:*} hostname)
+
+echo "========================================================"
+echo "Copying files    : ${SRC_DIR} -> ${DST_DIR}"
+echo "Destination User : ${DST_DIR%@*}"
+echo "Destination IP   : ${dst_ip}"
+echo "Destination Host : ${dst_hostname}"
+echo "========================================================="
+
+# Limit Logs -- Anything older than 30 days will get deleted
+find ${log_dir} -type f -mtime +30 -delete
+
+log_filename="${log_dir}/rsync-${dst_hostname}-$(date '+%Y%m%d-%s')"
+
+# Check if there is anything new in the NAS. If any exist, pull from NAS.
+file_check=$(rsync -ric --dry-run --delete "${SRC_DIR}/" $DST_DIR)
+if [[ -z $file_check ]]; then
+    echo "No new files found on NAS."
+else
+    echo -e "Found new files:\n $file_check"
+    echo "Pulling from ${dst_hostname} (${dst_ip})"
+    rsync -Phrcuv \
+        --log-file="${log_filename}-pulled.log" \
+        "${DST_DIR}/" "${SRC_DIR}"
+fi
+
+# Perform the Sync to NAS
+rsync -Phrcuv \
+    --log-file="${log_filename}-pushed.log" \
+    "${SRC_DIR}/" "${DST_DIR}"
