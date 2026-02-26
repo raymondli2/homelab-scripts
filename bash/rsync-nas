@@ -52,7 +52,7 @@ find ${log_dir} -type f -mtime +30 -delete
 log_filename="${log_dir}/rsync-${dst_hostname}-$(date '+%Y%m%d-%s')"
 
 # Check if there is anything new in the NAS. If any exist, pull from NAS.
-file_check=$(rsync -ric --dry-run --delete "${SRC_DIR}/" $DST_DIR)
+file_check=$(rsync -ric --dry-run --delete "${SRC_DIR}/" $DST_DIR | grep -v "^<")
 if [[ -z $file_check ]]; then
     echo "No new files found on NAS."
 else
