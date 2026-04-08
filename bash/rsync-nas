@@ -39,31 +39,36 @@ fi;
 
 dst_hostname=$(ssh ${DST_DIR%:*} hostname)
 
-echo "========================================================"
-echo "Copying files    : ${SRC_DIR} -> ${DST_DIR}"
-echo "Destination User : ${DST_DIR%@*}"
-echo "Destination IP   : ${dst_ip}"
-echo "Destination Host : ${dst_hostname}"
-echo "========================================================="
-
 # Limit Logs -- Anything older than 30 days will get deleted
 find ${log_dir} -type f -mtime +30 -delete
 
 log_filename="${log_dir}/rsync-${dst_hostname}-$(date '+%Y%m%d-%s')"
 
+echo "Checking ${DST_DIR} for new files..."
 # Check if there is anything new in the NAS. If any exist, pull from NAS.
-file_check=$(rsync -ric --dry-run --delete "${SRC_DIR}/" $DST_DIR | grep -v "^<")
+file_check=$(rsync -ric --dry-run --delete "${SRC_DIR}/" $DST_DIR | grep -e "^<")
 if [[ -z $file_check ]]; then
-    echo "No new files found on NAS."
+    echo "No new files found on ${DST_DIR}."
 else
     echo -e "Found new files:\n $file_check"
-    echo "Pulling from ${dst_hostname} (${dst_ip})"
+    echo "Updating files at ${SRC_DIR}"
+
     rsync -Phrcuv \
         --log-file="${log_filename}-pulled.log" \
         "${DST_DIR}/" "${SRC_DIR}"
 fi
 
 # Perform the Sync to NAS
+
+cat << 'COPY_INFO'
+========================================================"
+Copying files    : ${SRC_DIR} -> ${DST_DIR}"
+Destination User : ${DST_DIR%@*}"
+Destination IP   : ${dst_ip}"
+Destination Host : ${dst_hostname}"
+========================================================="
+COPY_INFO
+
 rsync -Phrcuv \
     --log-file="${log_filename}-pushed.log" \
     "${SRC_DIR}/" "${DST_DIR}"
